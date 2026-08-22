@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2025  Igara Studio S.A.
+// Copyright (C) 2018-present  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -227,6 +227,18 @@ void Doc::notifyGeneralUpdate()
   notify_observers<DocEvent&>(&DocObserver::onGeneralUpdate, ev);
 }
 
+void Doc::notifyBeforeSave()
+{
+  DocEvent ev(this);
+  notify_observers<DocEvent&>(&DocObserver::onBeforeSave, ev);
+}
+
+void Doc::notifyAfterSave()
+{
+  DocEvent ev(this);
+  notify_observers<DocEvent&>(&DocObserver::onAfterSave, ev);
+}
+
 void Doc::notifyColorSpaceChanged()
 {
   updateOSColorSpace(true);
@@ -360,6 +372,12 @@ void Doc::notifySliceDuplicated(Slice* slice)
   DocEvent ev(this);
   ev.slice(slice);
   notify_observers<DocEvent&>(&DocObserver::onSliceDuplicated, ev);
+}
+
+void Doc::notifyBeforeCommitTransaction()
+{
+  DocEvent ev(this);
+  notify_observers<DocEvent&>(&DocObserver::onBeforeCommitTransaction, ev);
 }
 
 bool Doc::isModified() const
@@ -622,6 +640,7 @@ Doc* Doc::duplicate(DuplicateType type) const
   std::unique_ptr<Doc> documentCopy(new Doc(spriteCopyPtr.get()));
   Sprite* spriteCopy = spriteCopyPtr.release();
 
+  spriteCopy->setUserData(sourceSprite->userData());
   spriteCopy->setTotalFrames(sourceSprite->totalFrames());
   spriteCopy->setTileManagementPlugin(sourceSprite->tileManagementPlugin());
 
@@ -689,7 +708,8 @@ Doc* Doc::duplicate(DuplicateType type) const
       // sprite has a background layer.
       if (sourceSprite->backgroundLayer() != NULL)
         flatLayer->configureAsBackground();
-    } break;
+      break;
+    }
   }
 
   // Copy only some flags

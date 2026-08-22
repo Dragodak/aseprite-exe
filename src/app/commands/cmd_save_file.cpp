@@ -221,16 +221,22 @@ void SaveFileBaseCommand::saveDocumentInBackground(const Context* context,
   if (!fop)
     return;
 
-  if (!fop->hasError() && resizeOnTheFly == ResizeOnTheFly::On)
-    fop->setOnTheFlyScale(scale);
+  if (!fop->hasError()) {
+    if (resizeOnTheFly == ResizeOnTheFly::On)
+      fop->setOnTheFlyScale(scale);
 
-  if (fop->fileFormat()->dioFormat() >= dio::FileFormat::FIRST_CUSTOM) {
-    // Custom formats must run on the main thread
-    fop->operate();
-  }
-  else {
-    SaveFileJob job(fop.get(), params().ui());
-    job.showProgressWindow();
+    if (markAsSaved == MarkAsSaved::On) {
+      document->notifyBeforeSave();
+    }
+
+    if (fop->fileFormat() && fop->fileFormat()->dioFormat() >= dio::FileFormat::FIRST_CUSTOM) {
+      // Custom formats must run on the main thread
+      fop->operate();
+    }
+    else {
+      SaveFileJob job(fop.get(), params().ui());
+      job.showProgressWindow();
+    }
   }
 
   if (fop->hasError()) {
@@ -255,6 +261,7 @@ void SaveFileBaseCommand::saveDocumentInBackground(const Context* context,
       document->markAsSaved();
       document->setFilename(filename);
       document->incrementVersion();
+      document->notifyAfterSave();
     }
 
     if (context->isUIAvailable() && params().ui()) {

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2025  Igara Studio S.A.
+// Copyright (C) 2025-present  Igara Studio S.A.
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -147,15 +147,18 @@ class RunnerWindow final : public gen::RunCommand {
         switch (msg->type()) {
           case kMouseDownMessage: {
             Click(m_item);
-          } break;
+            break;
+          }
           case kMouseEnterMessage:
           case kFocusEnterMessage: {
             setSelected(true);
-          } break;
+            break;
+          }
           case kMouseLeaveMessage:
           case kFocusLeaveMessage: {
             setSelected(false);
-          } break;
+            break;
+          }
           case kSetCursorMessage: {
             set_mouse_cursor(kHandCursor);
             return true;
@@ -522,7 +525,7 @@ void RunCommandCommand::loadDatabase()
         base::split_string(base::string_to_lower(key->triggerString()), labelWords, " ");
 
         const RunnerDB::Item item{
-          key->triggerString(), labelWords,     searchableStringStream.str(),
+          key->triggerString(), labelWords,     base::string_to_lower(searchableStringStream.str()),
           shortcutString,       key->command(), key->params()
         };
         items.try_emplace(itemKey, item);

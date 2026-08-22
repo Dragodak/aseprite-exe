@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2025  Igara Studio S.A.
+// Copyright (C) 2018-present  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -662,6 +662,7 @@ public:
 
     // Brush preview
     brushPreview()->setSelectedItemIndex((int)m_pref.cursor.brushPreview());
+    tilePreview()->setSelectedItemIndex((int)m_pref.cursor.tilePreview());
 
     // Guide colors
     layerEdgesColor()->setColor(m_pref.guides.layerEdgesColor());
@@ -876,6 +877,8 @@ public:
     m_pref.cursor.cursorColor(cursorColor()->getColor());
     m_pref.cursor.brushPreview(
       static_cast<app::gen::BrushPreview>(brushPreview()->getSelectedItemIndex()));
+    m_pref.cursor.tilePreview(
+      static_cast<app::gen::BrushPreview>(tilePreview()->getSelectedItemIndex()));
     m_pref.cursor.useNativeCursor(nativeCursor()->isSelected());
     m_pref.cursor.cursorScale(base::convert_to<int>(cursorScale()->getValue()));
     m_pref.selection.autoOpaque(autoOpaque()->isSelected());
@@ -1172,13 +1175,14 @@ private:
       case kFocusEnterMessage:
         // Resets the search when we focus any widget that has mouse interaction, unless it's in the
         // section list
-        if (msg->recipient() == sectionListbox() ||
-            (msg->recipient()->type() == kListItemWidget &&
-             msg->recipient()->parent() == sectionListbox()) ||
-            msg->recipient() == search() || msg->recipient()->hasFlags(IGNORE_MOUSE))
-          return false;
-
         if (!search()->text().empty()) {
+          if (auto* recipient = msg->recipient();
+              recipient &&
+              (recipient == sectionListbox() ||
+               (recipient->type() == kListItemWidget && recipient->parent() == sectionListbox()) ||
+               recipient == search() || recipient->hasFlags(IGNORE_MOUSE)))
+            return false;
+
           search()->clear();
           onSearch();
         }
@@ -1611,6 +1615,7 @@ private:
     exportAnimationInSequenceAlert()->resetWithDefaultValue();
     overwriteFilesOnExportAlert()->resetWithDefaultValue();
     overwriteFilesOnExportSpriteSheetAlert()->resetWithDefaultValue();
+    deleteTilemapDeleteUnusedTilesetAlert()->resetWithDefaultValue();
     advancedModeAlert()->resetWithDefaultValue();
     invalidFgBgColorAlert()->resetWithDefaultValue();
     runScriptAlert()->resetWithDefaultValue();
@@ -2291,8 +2296,10 @@ private:
 
         const auto& property = std::static_pointer_cast<SearchTextProperty>(
           widget->getProperty(SearchTextProperty::Name));
-        const auto& text = property->text();
+        if (!property)
+          continue;
 
+        const auto& text = property->text();
         if (text.empty())
           continue;
 
