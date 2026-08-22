@@ -2,9 +2,9 @@
 # Copyright (C) 2020-present  Igara Studio S.A.
 
 # Aseprite version
-set(VERSION "1.x-dev")
+set(VERSION "1.x-draglus")
 
-option(UPDATE_VERSION_WITH_GIT "Update Aseprite version using Git commit" on)
+option(UPDATE_VERSION_WITH_GIT "Update Aseprite version using Git commit" off)
 if(UPDATE_VERSION_WITH_GIT)
   find_package(Git)
   if(Git_FOUND)
@@ -14,11 +14,11 @@ if(UPDATE_VERSION_WITH_GIT)
       OUTPUT_VARIABLE VERSION
       OUTPUT_STRIP_TRAILING_WHITESPACE)
     string(REGEX REPLACE "^v" "" VERSION "${VERSION}")
-    string(REGEX REPLACE "-dev$" "" VERSION "${VERSION}")
+    string(REGEX REPLACE "-draglus$" "" VERSION "${VERSION}")
     if(NOT VERSION MATCHES "^1.[0-9]")
       set(VERSION "1.x-${VERSION}")
     endif()
-    set(VERSION "${VERSION}-dev")
+    set(VERSION "${VERSION}-draglus")
   endif()
 endif()
 
