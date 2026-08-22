@@ -4,7 +4,7 @@
 # Aseprite version
 set(VERSION "1.x-draglus")
 
-option(UPDATE_VERSION_WITH_GIT "Update Aseprite version using Git commit" off)
+option(UPDATE_VERSION_WITH_GIT "Update Aseprite version using Git commit" on)
 if(UPDATE_VERSION_WITH_GIT)
   find_package(Git)
   if(Git_FOUND)
