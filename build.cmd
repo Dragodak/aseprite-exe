@@ -1,132 +1,175 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal EnableExtensions EnableDelayedExpansion
 
-set PATH="C:\Program Files\7-Zip";%PATH%
+set "ROOT=%~dp0"
+pushd "%ROOT%" || exit /b 1
 
-where /q git.exe || (
-  echo ERROR: "git.exe" not found
-  exit /b 1
-)
+set "PATH=%ProgramFiles%\7-Zip;%PATH%"
+if not defined ASEPRITE_REPOSITORY set "ASEPRITE_REPOSITORY=https://github.com/aseprite/aseprite.git"
+if not defined DRAGLUS_VERSION_SUFFIX set "DRAGLUS_VERSION_SUFFIX=draglus-dev"
+
+where /q git.exe || goto :missing_git
+where /q curl.exe || goto :missing_curl
 
 if exist "%ProgramFiles%\7-Zip\7z.exe" (
-  set SZIP="%ProgramFiles%\7-Zip\7z.exe"
+  set "SZIP=%ProgramFiles%\7-Zip\7z.exe"
 ) else (
-  where /q 7za.exe || (
-    echo ERROR: 7-Zip installation or "7za.exe" not found
-    exit /b 1
-  )
-  set SZIP=7za.exe
+  where /q 7za.exe || goto :missing_7zip
+  set "SZIP=7za.exe"
 )
-
 
 rem *** Visual Studio environment ***
 
-where /Q cl.exe || (
-  set __VSCMD_ARG_NO_LOGO=1
-  for /f "tokens=*" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.VisualStudio.Workload.NativeDesktop -property installationPath') do set VS=%%i
-  if "!VS!" equ "" (
-    echo ERROR: Visual Studio installation not found
-    exit /b 1
-  )  
-  call "!VS!\VC\Auxiliary\Build\vcvarsall.bat" amd64 || exit /b 1
+where /Q cl.exe
+if errorlevel 1 (
+  set "__VSCMD_ARG_NO_LOGO=1"
+  if not exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" goto :missing_visual_studio
+  for /f "tokens=*" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.VisualStudio.Workload.NativeDesktop -property installationPath') do set "VS=%%i"
+  if not defined VS goto :missing_visual_studio
+  call "!VS!\VC\Auxiliary\Build\vcvarsall.bat" amd64
+  if errorlevel 1 goto :fail
 )
 
+rem *** Ninja ***
 
-rem *** ninja
-
-where /q ninja.exe || (
-  curl -LOsf https://github.com/ninja-build/ninja/releases/download/v1.13.1/ninja-win.zip || exit /b 1
-  %SZIP% x -bb0 -y ninja-win.zip 1>nul 2>nul || exit /b 1
-  del ninja-win.zip 1>nul 2>nul
+where /q ninja.exe
+if errorlevel 1 (
+  curl.exe -fL --retry 3 -o ninja-win.zip https://github.com/ninja-build/ninja/releases/download/v1.13.1/ninja-win.zip || goto :fail
+  "%SZIP%" x -bb0 -y ninja-win.zip >nul 2>nul || goto :fail
+  del /q ninja-win.zip >nul 2>nul
 )
 
+rem *** Clone or update Aseprite ***
 
-rem *** clone aseprite repo
-
-if not exist aseprite (
-  call git clone --recursive --tags https://github.com/aseprite/aseprite.git aseprite || echo "failed to clone repo" && exit /b 1
+if not exist "aseprite\.git" (
+  if exist "aseprite" goto :invalid_checkout
+  git clone --recursive --tags "%ASEPRITE_REPOSITORY%" aseprite || goto :fail
 ) else (
-  call git -C aseprite fetch --tags || echo "failed to fetch repo" && exit /b 1
+  git -C aseprite remote set-url origin "%ASEPRITE_REPOSITORY%" >nul 2>nul
+  git -C aseprite fetch --tags || goto :fail
 )
 
+if not defined ASEPRITE_VERSION (
+  for /f "delims=" %%v in ('git -C aseprite tag --sort=-creatordate') do if not defined ASEPRITE_VERSION set "ASEPRITE_VERSION=%%v"
+)
+if not defined ASEPRITE_VERSION goto :missing_version
 
-rem *** get name of newest tag
-
-if "%ASEPRITE_VERSION%" equ "" (
-  for /F "delims=" %%v in ('"git -C aseprite tag --sort=creatordate"') do (
-    set ASEPRITE_VERSION=%%v
-  )
+set "SOURCE_VERSION=!ASEPRITE_VERSION!"
+if not "!SOURCE_VERSION:~0,1!"=="v" (
+  git -C aseprite show-ref --verify --quiet "refs/tags/v!SOURCE_VERSION!" >nul 2>nul
+  if not errorlevel 1 set "SOURCE_VERSION=v!SOURCE_VERSION!"
 )
 
-echo building %ASEPRITE_VERSION%
+echo Building Aseprite source !SOURCE_VERSION! with Draglus branding
 
+git -C aseprite clean --quiet -fdx || goto :fail
+git -C aseprite submodule foreach --recursive git clean -xfd || goto :fail
+git -C aseprite fetch --quiet --depth=1 --no-tags origin "!SOURCE_VERSION!:refs/remotes/origin/!SOURCE_VERSION!" || goto :fail
+git -C aseprite reset --quiet --hard "origin/!SOURCE_VERSION!" || goto :fail
+git -C aseprite submodule update --init --recursive || goto :fail
 
-rem **** update local aseprite repo to selected tag
+rem Apply the supplied version module after resetting the upstream checkout.
+copy /Y "%ROOT%CMakeLists.txt" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
+copy /Y "%ROOT%generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
+copy /Y "%ROOT%info.c" "aseprite\src\ver\info.c" >nul || goto :fail
+copy /Y "%ROOT%info.h" "aseprite\src\ver\info.h" >nul || goto :fail
 
-call git -C aseprite clean --quiet -fdx
-call git -C aseprite submodule foreach --recursive git clean -xfd
-call git -C aseprite fetch --quiet --depth=1 --no-tags origin %ASEPRITE_VERSION%:refs/remotes/origin/%ASEPRITE_VERSION% || echo "failed to fetch repo"        && exit /b 1
-call git -C aseprite reset --quiet --hard origin/%ASEPRITE_VERSION%                                                     || echo "failed to update repo"       && exit /b 1
-call git -C aseprite submodule update --init --recursive                                                                || echo "failed to update submodules" && exit /b 1
+rem Calculate the user-visible version without Git's dirty marker.
+set "DISPLAY_VERSION=!SOURCE_VERSION!"
+if "!DISPLAY_VERSION:~0,1!"=="v" set "DISPLAY_VERSION=!DISPLAY_VERSION:~1!"
+set "DISPLAY_VERSION=!DISPLAY_VERSION:-dirty=!"
+set "DISPLAY_VERSION=!DISPLAY_VERSION:-draglus-dev=!"
+set "DISPLAY_VERSION=!DISPLAY_VERSION:-draglus=!"
+set "DISPLAY_VERSION=!DISPLAY_VERSION:-dev=!"
+if not "!DRAGLUS_VERSION_SUFFIX!"=="" set "DISPLAY_VERSION=!DISPLAY_VERSION!-!DRAGLUS_VERSION_SUFFIX!"
 
-python -c "v = open('aseprite/src/ver/CMakeLists.txt').read(); open('aseprite/src/ver/CMakeLists.txt', 'w').write(v.replace('1.x-dev', '%ASEPRITE_VERSION%'[1:]))"
+rem *** Download Skia ***
 
-
-rem *** download skia
-
-if exist aseprite\laf\misc\skia-tag.txt (
-  set /p SKIA_VERSION=<aseprite\laf\misc\skia-tag.txt
-) else (
-  if "%ASEPRITE_VERSION:beta=%" neq "%ASEPRITE_VERSION%" (
-    set SKIA_VERSION=m124-08a5439a6b
+set "SKIA_VERSION="
+if exist "aseprite\laf\misc\skia-tag.txt" set /p SKIA_VERSION=<"aseprite\laf\misc\skia-tag.txt"
+if not defined SKIA_VERSION (
+  if /i not "!SOURCE_VERSION:beta=!"=="!SOURCE_VERSION!" (
+    set "SKIA_VERSION=m124-08a5439a6b"
   ) else (
-    set SKIA_VERSION=m102-861e4743af
+    set "SKIA_VERSION=m102-861e4743af"
   )
 )
 
-if not exist skia-%SKIA_VERSION% (
-  mkdir skia-%SKIA_VERSION%
-  pushd skia-%SKIA_VERSION%
-  curl -sfLO https://github.com/aseprite/skia/releases/download/%SKIA_VERSION%/Skia-Windows-Release-x64.zip || echo failed to download skia && exit /b 1
-  %SZIP% x -y Skia-Windows-Release-x64.zip
+if not exist "skia-!SKIA_VERSION!\out\Release-x64" (
+  mkdir "skia-!SKIA_VERSION!" 2>nul
+  pushd "skia-!SKIA_VERSION!" || goto :fail
+  curl.exe -fL --retry 3 -o Skia-Windows-Release-x64.zip "https://github.com/aseprite/skia/releases/download/!SKIA_VERSION!/Skia-Windows-Release-x64.zip" || (popd & goto :fail)
+  "%SZIP%" x -y Skia-Windows-Release-x64.zip >nul 2>nul || (popd & goto :fail)
   popd
 )
 
+rem *** Build Aseprite ***
 
-rem *** build aseprite
+if exist build rmdir /s /q build
 
-if exist build rd /s /q build
+set "LINK=opengl32.lib"
+cmake.exe ^
+  -G Ninja ^
+  -S aseprite ^
+  -B build ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ^
+  -DCMAKE_POLICY_DEFAULT_CMP0074=NEW ^
+  -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
+  -DCMAKE_POLICY_DEFAULT_CMP0092=NEW ^
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
+  -DENABLE_CCACHE=OFF ^
+  -DOPENSSL_USE_STATIC_LIBS=TRUE ^
+  -DUPDATE_VERSION_WITH_GIT=ON ^
+  -DDRAGLUS_VERSION_SUFFIX=!DRAGLUS_VERSION_SUFFIX! ^
+  -DLAF_BACKEND=skia ^
+  -DSKIA_DIR=%CD%\skia-!SKIA_VERSION! ^
+  -DSKIA_LIBRARY_DIR=%CD%\skia-!SKIA_VERSION!\out\Release-x64 ^
+  -DSKIA_OPENGL_LIBRARY=
+if errorlevel 1 goto :fail
 
-set LINK=opengl32.lib
-cmake.exe                                                     ^
-  -G Ninja                                                    ^
-  -S aseprite                                                 ^
-  -B build                                                    ^
-  -DCMAKE_BUILD_TYPE=Release                                  ^
-  -DCMAKE_POLICY_VERSION_MINIMUM=3.5                          ^
-  -DCMAKE_POLICY_DEFAULT_CMP0074=NEW                          ^
-  -DCMAKE_POLICY_DEFAULT_CMP0091=NEW                          ^
-  -DCMAKE_POLICY_DEFAULT_CMP0092=NEW                          ^
-  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded                  ^
-  -DENABLE_CCACHE=OFF                                         ^
-  -DOPENSSL_USE_STATIC_LIBS=TRUE                              ^
-  -DLAF_BACKEND=skia                                          ^
-  -DSKIA_DIR=%CD%\skia-%SKIA_VERSION%                         ^
-  -DSKIA_LIBRARY_DIR=%CD%\skia-%SKIA_VERSION%\out\Release-x64 ^
-  -DSKIA_OPENGL_LIBRARY=                                      || echo failed to configure build && exit /b 1
-ninja.exe -C build || echo build failed && exit /b 1
+ninja.exe -C build
+if errorlevel 1 goto :fail
 
+rem *** Create a portable Windows package ***
 
-rem *** create output folder
+set "OUTPUT_DIR=aseprite-!DISPLAY_VERSION!-windows-x64"
+if exist "!OUTPUT_DIR!" rmdir /s /q "!OUTPUT_DIR!"
+mkdir "!OUTPUT_DIR!" || goto :fail
+echo # This file is here so Aseprite behaves as a portable program>"!OUTPUT_DIR!\aseprite.ini"
+xcopy /E /I /Q /Y "aseprite\docs" "!OUTPUT_DIR!\docs\" >nul || goto :fail
+copy /Y "build\bin\aseprite.exe" "!OUTPUT_DIR!\aseprite.exe" >nul || goto :fail
+xcopy /E /I /Q /Y "build\bin\data" "!OUTPUT_DIR!\data\" >nul || goto :fail
 
-mkdir aseprite-%ASEPRITE_VERSION%
-echo # This file is here so Aseprite behaves as a portable program >aseprite-%ASEPRITE_VERSION%\aseprite.ini
-xcopy /E /Q /Y aseprite\docs aseprite-%ASEPRITE_VERSION%\docs\
-xcopy /E /Q /Y build\bin\aseprite.exe aseprite-%ASEPRITE_VERSION%\
-xcopy /E /Q /Y build\bin\data aseprite-%ASEPRITE_VERSION%\data\
-
-if "%GITHUB_WORKFLOW%" neq "" (
-  mkdir github
-  move aseprite-%ASEPRITE_VERSION% github\
-  echo ASEPRITE_VERSION=%ASEPRITE_VERSION%>>"%GITHUB_OUTPUT%"
+if defined GITHUB_WORKFLOW (
+  if exist github rmdir /s /q github
+  mkdir github || goto :fail
+  move /Y "!OUTPUT_DIR!" github\ >nul || goto :fail
+  if defined GITHUB_OUTPUT echo ASEPRITE_VERSION=!DISPLAY_VERSION!>>"!GITHUB_OUTPUT!"
 )
+
+echo Windows package ready: !DISPLAY_VERSION!
+popd
+exit /b 0
+
+:missing_git
+echo ERROR: git.exe not found
+goto :fail
+:missing_curl
+echo ERROR: curl.exe not found
+goto :fail
+:missing_7zip
+echo ERROR: 7-Zip installation or 7za.exe not found
+goto :fail
+:missing_visual_studio
+echo ERROR: Visual Studio with the Native Desktop workload was not found
+goto :fail
+:invalid_checkout
+echo ERROR: aseprite exists but is not a Git checkout
+goto :fail
+:missing_version
+echo ERROR: no Aseprite tag was found; set ASEPRITE_VERSION explicitly
+goto :fail
+:fail
+popd
+exit /b 1
