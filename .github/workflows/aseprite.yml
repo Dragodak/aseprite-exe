@@ -1,31 +1,79 @@
-
 name: aseprite
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build, leave empty for latest"
+        description: "Aseprite tag to build, for example v1.3.18.5; leave empty for latest"
         required: false
+      repository:
+        description: "Aseprite Git repository to build"
+        required: false
+        default: "https://github.com/aseprite/aseprite.git"
+      version_suffix:
+        description: "Branding suffix, usually draglus-dev or draglus"
+        required: false
+        default: "draglus-dev"
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: windows-2025
-    steps:
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            platform: windows-x64
+          - os: ubuntu-24.04
+            platform: linux-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      ASEPRITE_VERSION: ${{ github.event.inputs.version }}
+      ASEPRITE_REPOSITORY: ${{ github.event.inputs.repository }}
+      DRAGLUS_VERSION_SUFFIX: ${{ github.event.inputs.version_suffix }}
 
-      - name: Checkout
+    steps:
+      - name: Checkout build files
         uses: actions/checkout@v4
 
-      - name: Build
-        id: build
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            clang cmake curl g++ git libc++-dev libc++abi-dev ninja-build \
+            unzip libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
+            libfontconfig1-dev
+
+      - name: Build Windows package
+        if: runner.os == 'Windows'
+        id: windows-build
         shell: cmd
         run: call build.cmd
-        env:
-          ASEPRITE_VERSION: ${{ github.event.inputs.version }}
 
-      - name: Archive
+      - name: Build Linux package
+        if: runner.os == 'Linux'
+        id: linux-build
+        shell: bash
+        run: bash build.sh
+
+      - name: Upload Windows package
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: aseprite-${{ steps.build.outputs.ASEPRITE_VERSION }}
+          name: aseprite-${{ matrix.platform }}-${{ steps.windows-build.outputs.ASEPRITE_VERSION }}
+          path: github
+          if-no-files-found: error
+
+      - name: Upload Linux package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite-${{ matrix.platform }}-${{ steps.linux-build.outputs.ASEPRITE_VERSION }}
           path: github
           if-no-files-found: error
