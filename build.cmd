@@ -6,6 +6,7 @@ pushd "%ROOT%" || exit /b 1
 
 set "PATH=%ProgramFiles%\7-Zip;%PATH%"
 if not defined ASEPRITE_REPOSITORY set "ASEPRITE_REPOSITORY=https://github.com/aseprite/aseprite.git"
+if not defined ASEPRITE_UPSTREAM_REPOSITORY set "ASEPRITE_UPSTREAM_REPOSITORY=https://github.com/aseprite/aseprite.git"
 if not defined DRAGLUS_VERSION_SUFFIX set "DRAGLUS_VERSION_SUFFIX=draglus-dev"
 
 where /q git.exe || goto :missing_git
@@ -52,6 +53,12 @@ if not exist "aseprite\.git" (
 if not defined ASEPRITE_VERSION (
   for /f "delims=" %%v in ('git -C aseprite tag --sort=-creatordate') do if not defined ASEPRITE_VERSION set "ASEPRITE_VERSION=%%v"
 )
+if not defined ASEPRITE_VERSION if /i not "%ASEPRITE_REPOSITORY%"=="%ASEPRITE_UPSTREAM_REPOSITORY%" (
+  git -C aseprite remote get-url upstream >nul 2>nul
+  if errorlevel 1 git -C aseprite remote add upstream "%ASEPRITE_UPSTREAM_REPOSITORY%"
+  git -C aseprite fetch --quiet --tags upstream || goto :fail
+  for /f "delims=" %%v in ('git -C aseprite tag --sort=-creatordate') do if not defined ASEPRITE_VERSION set "ASEPRITE_VERSION=%%v"
+)
 if not defined ASEPRITE_VERSION goto :missing_version
 
 set "SOURCE_VERSION=!ASEPRITE_VERSION!"
@@ -64,15 +71,44 @@ echo Building Aseprite source !SOURCE_VERSION! with Draglus branding
 
 git -C aseprite clean --quiet -fdx || goto :fail
 git -C aseprite submodule foreach --recursive git clean -xfd || goto :fail
-git -C aseprite fetch --quiet --depth=1 --no-tags origin "!SOURCE_VERSION!:refs/remotes/origin/!SOURCE_VERSION!" || goto :fail
-git -C aseprite reset --quiet --hard "origin/!SOURCE_VERSION!" || goto :fail
+set "SOURCE_REMOTE=origin"
+git -C aseprite fetch --quiet --depth=1 --no-tags origin "!SOURCE_VERSION!:refs/remotes/origin/!SOURCE_VERSION!"
+if errorlevel 1 (
+  if /i "%ASEPRITE_REPOSITORY%"=="%ASEPRITE_UPSTREAM_REPOSITORY%" goto :fail
+  echo Ref !SOURCE_VERSION! was not found in the selected repository; trying upstream.
+  git -C aseprite remote get-url upstream >nul 2>nul
+  if errorlevel 1 git -C aseprite remote add upstream "%ASEPRITE_UPSTREAM_REPOSITORY%"
+  git -C aseprite fetch --quiet --depth=1 --no-tags upstream "!SOURCE_VERSION!:refs/remotes/upstream/!SOURCE_VERSION!" || goto :fail
+  set "SOURCE_REMOTE=upstream"
+)
+git -C aseprite reset --quiet --hard "!SOURCE_REMOTE!/!SOURCE_VERSION!" || goto :fail
 git -C aseprite submodule update --init --recursive || goto :fail
 
-rem Apply the supplied version module after resetting the upstream checkout.
-copy /Y "%ROOT%CMakeLists.txt" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
-copy /Y "%ROOT%generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
-copy /Y "%ROOT%info.c" "aseprite\src\ver\info.c" >nul || goto :fail
-copy /Y "%ROOT%info.h" "aseprite\src\ver\info.h" >nul || goto :fail
+rem Apply supplied version files after resetting the source checkout.
+if exist "%ROOT%CMakeLists.txt" (
+  copy /Y "%ROOT%CMakeLists.txt" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
+) else if exist "%ROOT%src\ver\CMakeLists.txt" (
+  copy /Y "%ROOT%src\ver\CMakeLists.txt" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
+) else goto :missing_branding
+findstr /C:"DRAGLUS_VERSION_SUFFIX" "aseprite\src\ver\CMakeLists.txt" >nul || goto :missing_branding
+
+if exist "%ROOT%generated_version.h.in" (
+  copy /Y "%ROOT%generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
+) else if exist "%ROOT%src\ver\generated_version.h.in" (
+  copy /Y "%ROOT%src\ver\generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
+) else echo Using the checkout's upstream generated_version.h.in
+
+if exist "%ROOT%info.c" (
+  copy /Y "%ROOT%info.c" "aseprite\src\ver\info.c" >nul || goto :fail
+) else if exist "%ROOT%src\ver\info.c" (
+  copy /Y "%ROOT%src\ver\info.c" "aseprite\src\ver\info.c" >nul || goto :fail
+) else echo Using the checkout's upstream info.c
+
+if exist "%ROOT%info.h" (
+  copy /Y "%ROOT%info.h" "aseprite\src\ver\info.h" >nul || goto :fail
+) else if exist "%ROOT%src\ver\info.h" (
+  copy /Y "%ROOT%src\ver\info.h" "aseprite\src\ver\info.h" >nul || goto :fail
+) else echo Using the checkout's upstream info.h
 
 rem Calculate the user-visible version without Git's dirty marker.
 set "DISPLAY_VERSION=!SOURCE_VERSION!"
@@ -169,6 +205,9 @@ echo ERROR: aseprite exists but is not a Git checkout
 goto :fail
 :missing_version
 echo ERROR: no Aseprite tag was found; set ASEPRITE_VERSION explicitly
+goto :fail
+:missing_branding
+echo ERROR: missing CMakeLists.txt with Draglus version logic beside build.cmd
 goto :fail
 :fail
 popd
