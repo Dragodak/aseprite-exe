@@ -232,6 +232,15 @@ Editor::~Editor()
   setCustomizationDelegate(NULL);
 
   m_antsTimer.stop();
+
+  // Delete all EditorStates so we onBeforePopState() each state, and
+  // disconnect all observers from each state. This might be needed
+  // mainly when an unhandled exception is thrown and we don't want to
+  // create another crash from the stack unwinding keeping invalid
+  // observer connections/slots.
+  while (!m_statesHistory.empty())
+    backToPreviousState();
+  m_deletedStates.clear();
 }
 
 void Editor::destroyEditorSharedInternals()
@@ -317,7 +326,9 @@ void Editor::setStateInternal(const EditorStatePtr& newState)
     m_state = m_statesHistory.top();
   }
 
-  ASSERT(m_state);
+  // This can happen from ~Editor() when all states are be deleted.
+  if (!m_state)
+    return;
 
   // Change to the new state.
   m_state->onEnterState(this);
@@ -2678,7 +2689,9 @@ bool Editor::isInsideSelection()
   gfx::Point spritePos = screenToEditor(mousePosInDisplay());
   spritePos -= mainTilePosition();
 
-  KeyAction action = m_customizationDelegate->getPressedKeyAction(KeyContext::SelectionTool);
+  const KeyAction action = (m_customizationDelegate ? m_customizationDelegate->getPressedKeyAction(
+                                                        KeyContext::SelectionTool) :
+                                                      KeyAction::None);
   return (action == KeyAction::None) && m_document && m_document->isMaskVisible() &&
          m_document->mask()->containsPoint(spritePos.x, spritePos.y);
 }
@@ -2850,7 +2863,10 @@ void Editor::setZoomAndCenterInMouse(const Zoom& zoom,
   }
 }
 
-void Editor::pasteImage(const Image* image, const Mask* mask, const gfx::Point* position)
+void Editor::pasteImage(const Image* image,
+                        const Mask* mask,
+                        const gfx::Point* position,
+                        const Tileset* srcTileset)
 {
   ASSERT(image);
 
@@ -2941,6 +2957,10 @@ void Editor::pasteImage(const Image* image, const Mask* mask, const gfx::Point* 
 
   PixelsMovementPtr pixelsMovement(
     new PixelsMovement(UIContext::instance(), site, image, &mask2, "Paste", &m_tiledModeHelper));
+
+  // Adjust image when copying between tilemap layers
+  if (site.tilemapMode() == TilemapMode::Tiles && srcTileset != nullptr)
+    pixelsMovement->remapTilesForPaste(srcTileset);
 
   setState(EditorStatePtr(new MovingPixelsState(this, NULL, pixelsMovement, NoHandle)));
 }
