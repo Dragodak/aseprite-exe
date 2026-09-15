@@ -1,1 +1,7 @@
-#cmakedefine VERSION "@VERSION@"
+#ifndef GENERATED_VERSION_H_INCLUDED
+#define GENERATED_VERSION_H_INCLUDED
+#pragma once
+
+#define VERSION "@VERSION@"
+
+#endif /* GENERATED_VERSION_H_INCLUDED */
