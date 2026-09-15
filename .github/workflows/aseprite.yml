@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Aseprite tag to build, for example v1.3.18.5; leave empty for latest"
+        description: "Aseprite tag to build, for example v1.3.18.3; leave empty for latest"
         required: false
       repository:
         description: "Aseprite Git repository to build"
@@ -33,6 +33,7 @@ jobs:
     env:
       ASEPRITE_VERSION: ${{ github.event.inputs.version }}
       ASEPRITE_REPOSITORY: ${{ github.event.inputs.repository }}
+      ASEPRITE_UPSTREAM_REPOSITORY: https://github.com/aseprite/aseprite.git
       DRAGLUS_VERSION_SUFFIX: ${{ github.event.inputs.version_suffix }}
 
     steps:
