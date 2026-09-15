@@ -5,6 +5,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 SOURCE_REPOSITORY="${ASEPRITE_REPOSITORY:-https://github.com/aseprite/aseprite.git}"
+UPSTREAM_REPOSITORY="${ASEPRITE_UPSTREAM_REPOSITORY:-https://github.com/aseprite/aseprite.git}"
 REQUESTED_VERSION="${ASEPRITE_VERSION:-}"
 VERSION_SUFFIX="${DRAGLUS_VERSION_SUFFIX:-draglus-dev}"
 BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
@@ -22,7 +23,7 @@ require_command()
   command -v "$1" >/dev/null 2>&1 || fail "'$1' is required"
 }
 
-for command in git cmake ninja curl unzip tar tr; do
+for command in git cmake ninja curl unzip tar tr grep; do
   require_command "$command"
 done
 
@@ -34,14 +35,42 @@ else
   git -C "$SOURCE_DIR" fetch --tags
 fi
 
+ensure_upstream_remote()
+{
+  if git -C "$SOURCE_DIR" remote get-url upstream >/dev/null 2>&1; then
+    git -C "$SOURCE_DIR" remote set-url upstream "$UPSTREAM_REPOSITORY"
+  else
+    git -C "$SOURCE_DIR" remote add upstream "$UPSTREAM_REPOSITORY"
+  fi
+}
+
+latest_tag()
+{
+  git -C "$SOURCE_DIR" for-each-ref \
+    --format='%(refname:strip=2)' \
+    --sort=-version:refname refs/tags | head -n 1
+}
+
+fetch_version()
+{
+  local remote="$1"
+  local version="$2"
+  git -C "$SOURCE_DIR" fetch --quiet --depth=1 --no-tags "$remote" \
+    "$version:refs/remotes/$remote/$version"
+}
+
 if [[ -z "$REQUESTED_VERSION" ]]; then
-  REQUESTED_VERSION="$(git -C "$SOURCE_DIR" tag --sort=-creatordate | head -n 1)"
+  REQUESTED_VERSION="$(latest_tag)"
+  if [[ -z "$REQUESTED_VERSION" ]]; then
+    ensure_upstream_remote
+    git -C "$SOURCE_DIR" fetch --quiet --tags upstream
+    REQUESTED_VERSION="$(latest_tag)"
+  fi
 fi
 [[ -n "$REQUESTED_VERSION" ]] || fail "no Aseprite tag was found; set ASEPRITE_VERSION explicitly"
 
 SOURCE_VERSION="$REQUESTED_VERSION"
-if [[ "$SOURCE_VERSION" != v* ]] && \
-   git -C "$SOURCE_DIR" show-ref --verify --quiet "refs/tags/v$SOURCE_VERSION"; then
+if [[ "$SOURCE_VERSION" != v* && "$SOURCE_VERSION" =~ ^[0-9] ]]; then
   SOURCE_VERSION="v$SOURCE_VERSION"
 fi
 
@@ -49,16 +78,43 @@ echo "Building Aseprite source $SOURCE_VERSION with Draglus branding"
 
 git -C "$SOURCE_DIR" clean --quiet -fdx
 git -C "$SOURCE_DIR" submodule foreach --recursive git clean -xfd
-git -C "$SOURCE_DIR" fetch --quiet --depth=1 --no-tags origin \
-  "$SOURCE_VERSION:refs/remotes/origin/$SOURCE_VERSION"
-git -C "$SOURCE_DIR" reset --quiet --hard "origin/$SOURCE_VERSION"
+
+SOURCE_REMOTE=origin
+if ! fetch_version origin "$SOURCE_VERSION"; then
+  [[ "$SOURCE_REPOSITORY" != "$UPSTREAM_REPOSITORY" ]] || \
+    fail "Aseprite ref '$SOURCE_VERSION' was not found in $SOURCE_REPOSITORY"
+  echo "Ref $SOURCE_VERSION was not found in the selected repository; trying upstream."
+  ensure_upstream_remote
+  fetch_version upstream "$SOURCE_VERSION" || \
+    fail "Aseprite ref '$SOURCE_VERSION' was not found in either repository"
+  SOURCE_REMOTE=upstream
+fi
+
+git -C "$SOURCE_DIR" reset --quiet --hard "$SOURCE_REMOTE/$SOURCE_VERSION"
 git -C "$SOURCE_DIR" submodule update --init --recursive
 
-# Apply the supplied version module after resetting the upstream checkout.
+# Apply supplied version files after resetting the source checkout. The
+# generated template and declarations are optional because the cloned source
+# already contains compatible upstream copies.
 for file in CMakeLists.txt generated_version.h.in info.c info.h; do
-  [[ -f "$ROOT_DIR/$file" ]] || fail "missing local version file: $ROOT_DIR/$file"
-  cp -f "$ROOT_DIR/$file" "$SOURCE_DIR/src/ver/$file"
+  local_file=""
+  if [[ -f "$ROOT_DIR/$file" ]]; then
+    local_file="$ROOT_DIR/$file"
+  elif [[ -f "$ROOT_DIR/src/ver/$file" ]]; then
+    local_file="$ROOT_DIR/src/ver/$file"
+  fi
+
+  if [[ -n "$local_file" ]]; then
+    cp -f "$local_file" "$SOURCE_DIR/src/ver/$file"
+  elif [[ "$file" == CMakeLists.txt ]]; then
+    fail "missing branding file: place CMakeLists.txt beside build.sh"
+  else
+    echo "Using the checkout's upstream $file"
+  fi
 done
+
+grep -q 'DRAGLUS_VERSION_SUFFIX' "$SOURCE_DIR/src/ver/CMakeLists.txt" || \
+  fail "the local CMakeLists.txt is not the Draglus version module; use the supplied replacement"
 
 DISPLAY_VERSION="${SOURCE_VERSION#v}"
 DISPLAY_VERSION="${DISPLAY_VERSION%-dirty}"
