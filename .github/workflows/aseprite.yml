@@ -4,8 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Aseprite tag to build, for example v1.3.18.3; leave empty for latest"
-        required: false
+        description: "Pinned Aseprite release tag; update this when selecting a newer upstream release"
+        required: true
+        default: "v1.3.18.5"
+      source_commit:
+        description: "Full commit SHA for the selected Aseprite tag; update both values together"
+        required: true
+        default: "375989a61c3425cd4e8cdedfcfcca4bdfef7e1d9"
       repository:
         description: "Aseprite Git repository to build"
         required: false
@@ -33,10 +38,11 @@ jobs:
             platform: macos
     runs-on: ${{ matrix.os }}
     env:
-      ASEPRITE_VERSION: ${{ github.event.inputs.version }}
-      ASEPRITE_REPOSITORY: ${{ github.event.inputs.repository }}
+      ASEPRITE_VERSION: ${{ inputs.version }}
+      ASEPRITE_COMMIT: ${{ inputs.source_commit }}
+      ASEPRITE_REPOSITORY: ${{ inputs.repository }}
       ASEPRITE_UPSTREAM_REPOSITORY: https://github.com/aseprite/aseprite.git
-      DRAGLUS_VERSION_SUFFIX: ${{ github.event.inputs.version_suffix }}
+      DRAGLUS_VERSION_SUFFIX: ${{ inputs.version_suffix }}
 
     steps:
       - name: Checkout build files
