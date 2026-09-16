@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Pinned Aseprite release tag; update this when selecting a newer upstream release"
-        required: true
+        description: "Pinned Aseprite release tag; clear it when building an untagged source commit"
+        required: false
         default: "v1.3.18.5"
       source_commit:
-        description: "Full commit SHA for the selected Aseprite tag; update both values together"
+        description: "Full SHA for the selected tag, or an untagged commit when version is blank"
         required: true
         default: "375989a61c3425cd4e8cdedfcfcca4bdfef7e1d9"
       repository:
