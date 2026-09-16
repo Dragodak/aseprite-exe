@@ -8,10 +8,12 @@ set "PATH=%ProgramFiles%\7-Zip;%PATH%"
 if not defined ASEPRITE_REPOSITORY set "ASEPRITE_REPOSITORY=https://github.com/aseprite/aseprite.git"
 if not defined ASEPRITE_UPSTREAM_REPOSITORY set "ASEPRITE_UPSTREAM_REPOSITORY=https://github.com/aseprite/aseprite.git"
 if not defined DRAGLUS_VERSION_SUFFIX set "DRAGLUS_VERSION_SUFFIX=draglus-dev"
-if not defined ASEPRITE_VERSION goto :missing_version
+if not defined ASEPRITE_VERSION if not defined ASEPRITE_COMMIT goto :missing_ref
 
 set "SOURCE_VERSION=!ASEPRITE_VERSION!"
-if not "!SOURCE_VERSION:~0,1!"=="v" set "SOURCE_VERSION=v!SOURCE_VERSION!"
+if defined SOURCE_VERSION if not "!SOURCE_VERSION:~0,1!"=="v" set "SOURCE_VERSION=v!SOURCE_VERSION!"
+set "SOURCE_REF=!SOURCE_VERSION!"
+if not defined SOURCE_REF set "SOURCE_REF=!ASEPRITE_COMMIT!"
 
 where /q git.exe || goto :missing_git
 where /q curl.exe || goto :missing_curl
@@ -55,26 +57,41 @@ if not exist "aseprite\.git" (
   git -C aseprite fetch --tags || goto :fail
 )
 
-echo Building Aseprite source !SOURCE_VERSION! with Draglus branding
+echo Building Aseprite source !SOURCE_REF! with Draglus branding
 
 git -C aseprite clean --quiet -fdx || goto :fail
 git -C aseprite submodule foreach --recursive git clean -xfd || goto :fail
 set "SOURCE_REMOTE=origin"
-git -C aseprite fetch --quiet --depth=1 --no-tags origin "!SOURCE_VERSION!:refs/remotes/origin/!SOURCE_VERSION!"
+git -C aseprite fetch --quiet --depth=1 --no-tags origin "!SOURCE_REF!:refs/remotes/origin/!SOURCE_REF!"
 if errorlevel 1 (
   if /i "%ASEPRITE_REPOSITORY%"=="%ASEPRITE_UPSTREAM_REPOSITORY%" goto :fail
-  echo Ref !SOURCE_VERSION! was not found in the selected repository; trying upstream.
+  echo Ref !SOURCE_REF! was not found in the selected repository; trying upstream.
   git -C aseprite remote get-url upstream >nul 2>nul
   if errorlevel 1 git -C aseprite remote add upstream "%ASEPRITE_UPSTREAM_REPOSITORY%"
-  git -C aseprite fetch --quiet --depth=1 --no-tags upstream "!SOURCE_VERSION!:refs/remotes/upstream/!SOURCE_VERSION!" || goto :fail
+  git -C aseprite fetch --quiet --depth=1 --no-tags upstream "!SOURCE_REF!:refs/remotes/upstream/!SOURCE_REF!" || goto :fail
   set "SOURCE_REMOTE=upstream"
 )
 
 set "SOURCE_COMMIT="
-for /f "delims=" %%c in ('git -C aseprite rev-list -n 1 "!SOURCE_REMOTE!/!SOURCE_VERSION!" 2^>nul') do set "SOURCE_COMMIT=%%c"
+for /f "delims=" %%c in ('git -C aseprite rev-list -n 1 "!SOURCE_REMOTE!/!SOURCE_REF!" 2^>nul') do set "SOURCE_COMMIT=%%c"
 if not defined SOURCE_COMMIT goto :missing_commit
 if defined ASEPRITE_COMMIT if /I not "!SOURCE_COMMIT!"=="!ASEPRITE_COMMIT!" goto :commit_mismatch
 if not defined ASEPRITE_COMMIT echo Warning: ASEPRITE_COMMIT is not set; the tag is explicit but not commit-verified.
+
+if not defined SOURCE_VERSION (
+  set "DERIVED_VERSION="
+  for /f "delims=" %%v in ('git -C aseprite describe --tags --always "!SOURCE_COMMIT!" 2^>nul') do set "DERIVED_VERSION=%%v"
+  if not "!DERIVED_VERSION:~0,1!"=="v" if /i not "%ASEPRITE_REPOSITORY%"=="%ASEPRITE_UPSTREAM_REPOSITORY%" (
+    git -C aseprite remote get-url upstream >nul 2>nul
+    if errorlevel 1 git -C aseprite remote add upstream "%ASEPRITE_UPSTREAM_REPOSITORY%"
+    git -C aseprite fetch --quiet --tags upstream || goto :fail
+    for /f "delims=" %%v in ('git -C aseprite describe --tags --always "!SOURCE_COMMIT!" 2^>nul') do set "DERIVED_VERSION=%%v"
+  )
+  if not "!DERIVED_VERSION:~0,1!"=="v" goto :missing_base_version
+  set "SOURCE_VERSION=!DERIVED_VERSION!"
+  echo Derived base version !SOURCE_VERSION! from the pinned commit
+)
+
 echo Using pinned Aseprite commit !SOURCE_COMMIT!
 git -C aseprite reset --quiet --hard "!SOURCE_COMMIT!" || goto :fail
 git -C aseprite submodule update --init --recursive || goto :fail
@@ -216,14 +233,17 @@ goto :fail
 :invalid_checkout
 echo ERROR: aseprite exists but is not a Git checkout
 goto :fail
-:missing_version
-echo ERROR: ASEPRITE_VERSION must be set to an explicit Aseprite release tag (for example v1.3.18.5)
+:missing_ref
+echo ERROR: set ASEPRITE_VERSION to a tag, or ASEPRITE_COMMIT to a full SHA for an untagged commit
 goto :fail
 :missing_commit
 echo ERROR: the selected Aseprite tag did not resolve to a commit
 goto :fail
 :commit_mismatch
-echo ERROR: Aseprite tag !SOURCE_VERSION! resolves to !SOURCE_COMMIT!, expected !ASEPRITE_COMMIT!
+echo ERROR: Aseprite ref !SOURCE_REF! resolves to !SOURCE_COMMIT!, expected !ASEPRITE_COMMIT!
+goto :fail
+:missing_base_version
+echo ERROR: could not derive a release version for !SOURCE_COMMIT!; set ASEPRITE_VERSION to its base tag
 goto :fail
 :missing_branding
 echo ERROR: missing Draglus version module at src\ver\CMakeLists.txt
