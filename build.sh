@@ -18,6 +18,35 @@ fail()
   exit 1
 }
 
+case "$(uname -s)" in
+  Darwin*)
+    TARGET_PLATFORM=macos
+    MACOS_ARCHITECTURE="${DRAGLUS_MACOS_ARCH:-${CMAKE_OSX_ARCHITECTURES:-$(uname -m)}}"
+    case "$MACOS_ARCHITECTURE" in
+      arm64|aarch64)
+        MACOS_ARCHITECTURE=arm64
+        SKIA_ARCH=arm64
+        MACOS_DEPLOYMENT_TARGET="${DRAGLUS_MACOS_DEPLOYMENT_TARGET:-11.0}"
+        ;;
+      x86_64|x64)
+        MACOS_ARCHITECTURE=x86_64
+        SKIA_ARCH=x64
+        MACOS_DEPLOYMENT_TARGET="${DRAGLUS_MACOS_DEPLOYMENT_TARGET:-10.14}"
+        ;;
+      *)
+        fail "unsupported macOS architecture '$MACOS_ARCHITECTURE'; use arm64 or x86_64"
+        ;;
+    esac
+    ;;
+  Linux*)
+    TARGET_PLATFORM=linux
+    SKIA_ARCH=x64
+    ;;
+  *)
+    fail "this script supports Linux and macOS only"
+    ;;
+esac
+
 require_command()
 {
   command -v "$1" >/dev/null 2>&1 || fail "'$1' is required"
@@ -126,6 +155,19 @@ done
 grep -q 'DRAGLUS_VERSION_SUFFIX' "$SOURCE_DIR/src/ver/CMakeLists.txt" || \
   fail "src/ver/CMakeLists.txt is not the Draglus version module; use the supplied replacement"
 
+# Make the updater compare the upstream numeric version, while leaving the
+# Draglus suffix visible in the title and About dialog.
+UPDATE_PATCH="$ROOT_DIR/check_update_draglus.patch"
+if [[ -f "$UPDATE_PATCH" ]]; then
+  if ! grep -q 'Draglus is a display/build suffix' "$SOURCE_DIR/src/app/check_update.cpp"; then
+    git -C "$SOURCE_DIR" apply --check "$UPDATE_PATCH" >/dev/null 2>&1 || \
+      fail "the Draglus update-check patch does not match this Aseprite source"
+    git -C "$SOURCE_DIR" apply "$UPDATE_PATCH"
+  fi
+else
+  echo "Warning: check_update_draglus.patch not found; the updater may report the same version as newer."
+fi
+
 DISPLAY_VERSION="${SOURCE_VERSION#v}"
 DISPLAY_VERSION="${DISPLAY_VERSION%-dirty}"
 DISPLAY_VERSION="${DISPLAY_VERSION%-draglus-dev}"
@@ -142,7 +184,7 @@ if [[ -z "$SKIA_VERSION" && -f "$SOURCE_DIR/laf/misc/skia-tag.txt" ]]; then
   SKIA_VERSION="$(tr -d '\r\n' < "$SOURCE_DIR/laf/misc/skia-tag.txt")"
 fi
 if [[ -z "$SKIA_URL" && -f "$SOURCE_DIR/laf/misc/skia-url.sh" ]]; then
-  if ! SKIA_URL="$(cd "$SOURCE_DIR" && source laf/misc/skia-url.sh | xargs)"; then
+  if ! SKIA_URL="$(cd "$SOURCE_DIR" && bash laf/misc/skia-url.sh Release "$TARGET_PLATFORM" "$SKIA_ARCH" | tr -d '\r\n')"; then
     SKIA_URL=""
   fi
 fi
@@ -156,7 +198,9 @@ if [[ -z "$SKIA_URL" ]]; then
       SKIA_VERSION="m102-861e4743af"
     fi
   fi
-  if [[ "$SKIA_VERSION" == m124-* ]]; then
+  if [[ "$TARGET_PLATFORM" == macos ]]; then
+    SKIA_ARCHIVE="Skia-macOS-Release-$SKIA_ARCH.zip"
+  elif [[ "$SKIA_VERSION" == m124-* ]]; then
     SKIA_ARCHIVE="Skia-Linux-Release-x64.zip"
   else
     SKIA_ARCHIVE="Skia-Linux-Release-x64-libc++.zip"
@@ -169,7 +213,7 @@ if [[ -z "$SKIA_URL" ]]; then
 else
   SKIA_ARCHIVE="${SKIA_URL##*/}"
   SKIA_ARCHIVE="${SKIA_ARCHIVE%%\?*}"
-  if [[ "$SKIA_ARCHIVE" == *libc++* ]]; then
+  if [[ "$TARGET_PLATFORM" == linux && "$SKIA_ARCHIVE" == *libc++* ]]; then
     SKIA_CXX_FLAGS+=(
       "-DCMAKE_CXX_FLAGS:STRING=-stdlib=libc++"
       "-DCMAKE_EXE_LINKER_FLAGS:STRING=-stdlib=libc++"
@@ -184,14 +228,15 @@ if [[ -z "$SKIA_VERSION" ]]; then
   [[ -n "$SKIA_VERSION" && "$SKIA_VERSION" != "$SKIA_URL" ]] || SKIA_VERSION=custom
 fi
 
-SKIA_DIR="$ROOT_DIR/.deps/skia-$SKIA_VERSION"
+SKIA_DIR="$ROOT_DIR/.deps/skia-$SKIA_VERSION-$SKIA_ARCH"
+SKIA_LIBRARY_DIR="$SKIA_DIR/out/Release-$SKIA_ARCH"
 mkdir -p "$SKIA_DIR"
-if [[ ! -f "$SKIA_DIR/out/Release-x64/libskia.a" ]]; then
+if [[ ! -f "$SKIA_LIBRARY_DIR/libskia.a" ]]; then
   curl --fail --location --retry 3 --retry-delay 2 \
     --output "$SKIA_DIR/$SKIA_ARCHIVE" "$SKIA_URL"
   unzip -q -o "$SKIA_DIR/$SKIA_ARCHIVE" -d "$SKIA_DIR"
 fi
-[[ -f "$SKIA_DIR/out/Release-x64/libskia.a" ]] || \
+[[ -f "$SKIA_LIBRARY_DIR/libskia.a" ]] || \
   fail "Skia was downloaded but libskia.a is missing"
 
 export CC="${CC:-clang}"
@@ -206,22 +251,59 @@ cmake_args=(
   "-DDRAGLUS_VERSION_SUFFIX=$VERSION_SUFFIX"
   -DLAF_BACKEND=skia
   "-DSKIA_DIR=$SKIA_DIR"
-  "-DSKIA_LIBRARY_DIR=$SKIA_DIR/out/Release-x64"
+  "-DSKIA_LIBRARY_DIR=$SKIA_LIBRARY_DIR"
+  "-DSKIA_LIBRARY=$SKIA_LIBRARY_DIR/libskia.a"
 )
-cmake_args+=("${SKIA_CXX_FLAGS[@]}")
+if [[ "$TARGET_PLATFORM" == macos ]]; then
+  cmake_args+=(
+    "-DCMAKE_OSX_ARCHITECTURES=$MACOS_ARCHITECTURE"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_DEPLOYMENT_TARGET"
+  )
+fi
+if [[ "${#SKIA_CXX_FLAGS[@]}" -gt 0 ]]; then
+  cmake_args+=("${SKIA_CXX_FLAGS[@]}")
+fi
 cmake "${cmake_args[@]}"
 cmake --build "$BUILD_DIR" --target aseprite --parallel
 
-PACKAGE_DIR="$ROOT_DIR/aseprite-$DISPLAY_VERSION-linux-x64"
-ARCHIVE_PATH="$ROOT_DIR/aseprite-$DISPLAY_VERSION-linux-x64.tar.gz"
-rm -rf "$PACKAGE_DIR"
-rm -f "$ARCHIVE_PATH"
-mkdir -p "$PACKAGE_DIR"
-printf '%s\n' '# This file is here so Aseprite behaves as a portable program' > "$PACKAGE_DIR/aseprite.ini"
-cp -a "$BUILD_DIR/bin/aseprite" "$PACKAGE_DIR/"
-cp -a "$BUILD_DIR/bin/data" "$PACKAGE_DIR/"
-[[ ! -d "$SOURCE_DIR/docs" ]] || cp -a "$SOURCE_DIR/docs" "$PACKAGE_DIR/"
-tar -czf "$ARCHIVE_PATH" -C "$ROOT_DIR" "$(basename "$PACKAGE_DIR")"
+if [[ "$TARGET_PLATFORM" == macos ]]; then
+  PACKAGE_DIR="$ROOT_DIR/aseprite-$DISPLAY_VERSION-macos-$SKIA_ARCH"
+  APP_DIR="$PACKAGE_DIR/Aseprite.app"
+  ARCHIVE_PATH="$ROOT_DIR/aseprite-$DISPLAY_VERSION-macos-$SKIA_ARCH.zip"
+  rm -rf "$PACKAGE_DIR"
+  rm -f "$ARCHIVE_PATH"
+  mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+  cp -a "$BUILD_DIR/bin/aseprite" "$APP_DIR/Contents/MacOS/aseprite"
+  chmod +x "$APP_DIR/Contents/MacOS/aseprite"
+  cp -a "$BUILD_DIR/bin/data" "$APP_DIR/Contents/Resources/"
+  [[ ! -d "$SOURCE_DIR/docs" ]] || cp -a "$SOURCE_DIR/docs" "$APP_DIR/Contents/Resources/"
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+    printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    printf '%s\n' '<plist version="1.0"><dict>'
+    printf '%s\n' '<key>CFBundleExecutable</key><string>aseprite</string>'
+    printf '%s\n' '<key>CFBundleIdentifier</key><string>com.draglus.aseprite</string>'
+    printf '%s\n' '<key>CFBundleName</key><string>Aseprite</string>'
+    printf '%s\n' '<key>CFBundleDisplayName</key><string>Aseprite</string>'
+    printf '%s\n' '<key>CFBundlePackageType</key><string>APPL</string>'
+    printf '%s\n' '<key>CFBundleShortVersionString</key><string>'"${DISPLAY_VERSION%%-*}"'</string>'
+    printf '%s\n' '<key>CFBundleVersion</key><string>'"${DISPLAY_VERSION%%-*}"'</string>'
+    printf '%s\n' '<key>LSMinimumSystemVersion</key><string>'"$MACOS_DEPLOYMENT_TARGET"'</string>'
+    printf '%s\n' '</dict></plist>'
+  } > "$APP_DIR/Contents/Info.plist"
+  ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE_PATH"
+else
+  PACKAGE_DIR="$ROOT_DIR/aseprite-$DISPLAY_VERSION-linux-x64"
+  ARCHIVE_PATH="$ROOT_DIR/aseprite-$DISPLAY_VERSION-linux-x64.tar.gz"
+  rm -rf "$PACKAGE_DIR"
+  rm -f "$ARCHIVE_PATH"
+  mkdir -p "$PACKAGE_DIR"
+  printf '%s\n' '# This file is here so Aseprite behaves as a portable program' > "$PACKAGE_DIR/aseprite.ini"
+  cp -a "$BUILD_DIR/bin/aseprite" "$PACKAGE_DIR/"
+  cp -a "$BUILD_DIR/bin/data" "$PACKAGE_DIR/"
+  [[ ! -d "$SOURCE_DIR/docs" ]] || cp -a "$SOURCE_DIR/docs" "$PACKAGE_DIR/"
+  tar -czf "$ARCHIVE_PATH" -C "$ROOT_DIR" "$(basename "$PACKAGE_DIR")"
+fi
 
 if [[ -n "${GITHUB_WORKFLOW:-}" ]]; then
   rm -rf "$ROOT_DIR/github"
@@ -232,4 +314,4 @@ if [[ -n "${GITHUB_WORKFLOW:-}" ]]; then
   fi
 fi
 
-echo "Linux package ready: $DISPLAY_VERSION"
+echo "$TARGET_PLATFORM package ready: $DISPLAY_VERSION ($SKIA_ARCH)"
