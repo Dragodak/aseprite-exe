@@ -98,23 +98,33 @@ git -C "$SOURCE_DIR" submodule update --init --recursive
 # already contains compatible upstream copies.
 for file in CMakeLists.txt generated_version.h.in info.c info.h; do
   local_file=""
-  if [[ -f "$ROOT_DIR/$file" ]]; then
-    local_file="$ROOT_DIR/$file"
+  if [[ "$file" == CMakeLists.txt ]]; then
+    # A full Aseprite checkout also has a top-level CMakeLists.txt. The
+    # version module must come from src/ver unless a root file is explicitly
+    # a Draglus version module.
+    if [[ -f "$ROOT_DIR/src/ver/CMakeLists.txt" ]]; then
+      local_file="$ROOT_DIR/src/ver/CMakeLists.txt"
+    elif [[ -f "$ROOT_DIR/CMakeLists.txt" ]] &&
+         grep -q 'DRAGLUS_VERSION_SUFFIX' "$ROOT_DIR/CMakeLists.txt"; then
+      local_file="$ROOT_DIR/CMakeLists.txt"
+    fi
   elif [[ -f "$ROOT_DIR/src/ver/$file" ]]; then
     local_file="$ROOT_DIR/src/ver/$file"
+  elif [[ -f "$ROOT_DIR/$file" ]]; then
+    local_file="$ROOT_DIR/$file"
   fi
 
   if [[ -n "$local_file" ]]; then
     cp -f "$local_file" "$SOURCE_DIR/src/ver/$file"
   elif [[ "$file" == CMakeLists.txt ]]; then
-    fail "missing branding file: place CMakeLists.txt beside build.sh"
+    fail "missing Draglus version module: place it at src/ver/CMakeLists.txt"
   else
     echo "Using the checkout's upstream $file"
   fi
 done
 
 grep -q 'DRAGLUS_VERSION_SUFFIX' "$SOURCE_DIR/src/ver/CMakeLists.txt" || \
-  fail "the local CMakeLists.txt is not the Draglus version module; use the supplied replacement"
+  fail "src/ver/CMakeLists.txt is not the Draglus version module; use the supplied replacement"
 
 DISPLAY_VERSION="${SOURCE_VERSION#v}"
 DISPLAY_VERSION="${DISPLAY_VERSION%-dirty}"
