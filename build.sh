@@ -19,11 +19,11 @@ fail()
   exit 1
 }
 
-[[ -n "$REQUESTED_VERSION" ]] || \
-  fail "ASEPRITE_VERSION must be set to an explicit Aseprite release tag (for example v1.3.18.5)"
+[[ -n "$REQUESTED_VERSION" || -n "$PINNED_COMMIT" ]] || \
+  fail "set ASEPRITE_VERSION to a tag, or set ASEPRITE_COMMIT to a full SHA for an untagged commit"
 
 SOURCE_VERSION="$REQUESTED_VERSION"
-if [[ "$SOURCE_VERSION" != v* && "$SOURCE_VERSION" =~ ^[0-9] ]]; then
+if [[ -n "$SOURCE_VERSION" && "$SOURCE_VERSION" != v* && "$SOURCE_VERSION" =~ ^[0-9] ]]; then
   SOURCE_VERSION="v$SOURCE_VERSION"
 fi
 
@@ -92,33 +92,72 @@ fetch_version()
     "$version:refs/remotes/$remote/$version"
 }
 
-echo "Building Aseprite source $SOURCE_VERSION with Draglus branding"
+fetch_commit()
+{
+  local remote="$1"
+  local commit="$2"
+  git -C "$SOURCE_DIR" fetch --quiet --depth=1 --no-tags "$remote" \
+    "$commit:refs/remotes/$remote/$commit"
+}
+
+SOURCE_REF="$SOURCE_VERSION"
+if [[ -z "$SOURCE_REF" ]]; then
+  [[ "$PINNED_COMMIT" =~ ^[[:xdigit:]]{40}$ ]] || \
+    fail "ASEPRITE_COMMIT must be a full 40-character commit SHA"
+  SOURCE_REF="$PINNED_COMMIT"
+fi
+
+echo "Building Aseprite source $SOURCE_REF with Draglus branding"
 
 git -C "$SOURCE_DIR" clean --quiet -fdx
 git -C "$SOURCE_DIR" submodule foreach --recursive git clean -xfd
 
 SOURCE_REMOTE=origin
-if ! fetch_version origin "$SOURCE_VERSION"; then
+if [[ -n "$SOURCE_VERSION" ]]; then
+  FETCH_OK=1
+  fetch_version origin "$SOURCE_VERSION" || FETCH_OK=0
+else
+  FETCH_OK=1
+  fetch_commit origin "$PINNED_COMMIT" || FETCH_OK=0
+fi
+if [[ "$FETCH_OK" -eq 0 ]]; then
   [[ "$SOURCE_REPOSITORY" != "$UPSTREAM_REPOSITORY" ]] || \
-    fail "Aseprite ref '$SOURCE_VERSION' was not found in $SOURCE_REPOSITORY"
-  echo "Ref $SOURCE_VERSION was not found in the selected repository; trying upstream."
+    fail "Aseprite ref '$SOURCE_REF' was not found in $SOURCE_REPOSITORY"
+  echo "Ref $SOURCE_REF was not found in the selected repository; trying upstream."
   ensure_upstream_remote
-  fetch_version upstream "$SOURCE_VERSION" || \
-    fail "Aseprite ref '$SOURCE_VERSION' was not found in either repository"
+  if [[ -n "$SOURCE_VERSION" ]]; then
+    fetch_version upstream "$SOURCE_VERSION" || \
+      fail "Aseprite ref '$SOURCE_REF' was not found in either repository"
+  else
+    fetch_commit upstream "$PINNED_COMMIT" || \
+      fail "Aseprite ref '$SOURCE_REF' was not found in either repository"
+  fi
   SOURCE_REMOTE=upstream
 fi
 
-SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse "$SOURCE_REMOTE/$SOURCE_VERSION^{commit}" 2>/dev/null)" || \
-  fail "Aseprite ref '$SOURCE_VERSION' did not resolve to a commit"
+SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse "$SOURCE_REMOTE/$SOURCE_REF^{commit}" 2>/dev/null)" || \
+  fail "Aseprite ref '$SOURCE_REF' did not resolve to a commit"
 SOURCE_COMMIT="$(printf '%s' "$SOURCE_COMMIT" | tr '[:upper:]' '[:lower:]')"
 if [[ -n "$PINNED_COMMIT" ]]; then
   [[ "$PINNED_COMMIT" =~ ^[[:xdigit:]]{40}$ ]] || \
     fail "ASEPRITE_COMMIT must be a full 40-character commit SHA"
   PINNED_COMMIT="$(printf '%s' "$PINNED_COMMIT" | tr '[:upper:]' '[:lower:]')"
   [[ "$SOURCE_COMMIT" == "$PINNED_COMMIT" ]] || \
-    fail "Aseprite tag $SOURCE_VERSION resolves to $SOURCE_COMMIT, expected $PINNED_COMMIT"
+    fail "Aseprite ref $SOURCE_REF resolves to $SOURCE_COMMIT, expected $PINNED_COMMIT"
 else
   echo "Warning: ASEPRITE_COMMIT is not set; the tag is explicit but not commit-verified."
+fi
+
+if [[ -z "$SOURCE_VERSION" ]]; then
+  SOURCE_VERSION="$(git -C "$SOURCE_DIR" describe --tags --always "$SOURCE_COMMIT" 2>/dev/null || true)"
+  if [[ "$SOURCE_VERSION" != v* ]]; then
+    ensure_upstream_remote
+    git -C "$SOURCE_DIR" fetch --quiet --tags upstream
+    SOURCE_VERSION="$(git -C "$SOURCE_DIR" describe --tags --always "$SOURCE_COMMIT" 2>/dev/null || true)"
+  fi
+  [[ "$SOURCE_VERSION" == v* ]] || \
+    fail "could not derive a release version for $SOURCE_COMMIT; set ASEPRITE_VERSION to its base tag"
+  echo "Derived base version $SOURCE_VERSION from the pinned commit"
 fi
 
 echo "Using pinned Aseprite commit $SOURCE_COMMIT"
