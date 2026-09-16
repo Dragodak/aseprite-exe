@@ -96,6 +96,16 @@ if not defined VERSION_CMAKE goto :missing_branding
 copy /Y "!VERSION_CMAKE!" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
 findstr /C:"DRAGLUS_VERSION_SUFFIX" "aseprite\src\ver\CMakeLists.txt" >nul || goto :missing_branding
 
+rem Make the updater compare the upstream numeric version while keeping the
+rem Draglus suffix visible in the title and About dialog.
+if exist "%ROOT%check_update_draglus.patch" (
+  findstr /C:"Draglus is a display/build suffix" "aseprite\src\app\check_update.cpp" >nul
+  if errorlevel 1 (
+    git -C aseprite apply --check "%ROOT%check_update_draglus.patch" >nul 2>nul || goto :update_patch_mismatch
+    git -C aseprite apply "%ROOT%check_update_draglus.patch" || goto :fail
+  )
+) else echo Warning: check_update_draglus.patch not found; the updater may report the same version as newer.
+
 if exist "%ROOT%src\ver\generated_version.h.in" (
   copy /Y "%ROOT%src\ver\generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
 ) else if exist "%ROOT%generated_version.h.in" (
@@ -212,6 +222,9 @@ echo ERROR: no Aseprite tag was found; set ASEPRITE_VERSION explicitly
 goto :fail
 :missing_branding
 echo ERROR: missing Draglus version module at src\ver\CMakeLists.txt
+goto :fail
+:update_patch_mismatch
+echo ERROR: the Draglus update-check patch does not match this Aseprite source
 goto :fail
 :fail
 popd
