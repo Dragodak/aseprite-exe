@@ -160,9 +160,15 @@ grep -q 'DRAGLUS_VERSION_SUFFIX' "$SOURCE_DIR/src/ver/CMakeLists.txt" || \
 UPDATE_PATCH="$ROOT_DIR/check_update_draglus.patch"
 if [[ -f "$UPDATE_PATCH" ]]; then
   if ! grep -q 'Draglus is a display/build suffix' "$SOURCE_DIR/src/app/check_update.cpp"; then
-    git -C "$SOURCE_DIR" apply --check "$UPDATE_PATCH" >/dev/null 2>&1 || \
+    if git -C "$SOURCE_DIR" apply --check "$UPDATE_PATCH" >/dev/null 2>&1; then
+      git -C "$SOURCE_DIR" apply "$UPDATE_PATCH"
+    elif git -C "$SOURCE_DIR" apply --check --ignore-space-at-eol "$UPDATE_PATCH" >/dev/null 2>&1; then
+      # A patch committed from Windows may contain CRLF line endings while
+      # the Linux/macOS checkout uses LF.
+      git -C "$SOURCE_DIR" apply --ignore-space-at-eol "$UPDATE_PATCH"
+    else
       fail "the Draglus update-check patch does not match this Aseprite source"
-    git -C "$SOURCE_DIR" apply "$UPDATE_PATCH"
+    fi
   fi
 else
   echo "Warning: check_update_draglus.patch not found; the updater may report the same version as newer."
