@@ -85,29 +85,33 @@ git -C aseprite reset --quiet --hard "!SOURCE_REMOTE!/!SOURCE_VERSION!" || goto 
 git -C aseprite submodule update --init --recursive || goto :fail
 
 rem Apply supplied version files after resetting the source checkout.
-if exist "%ROOT%CMakeLists.txt" (
-  copy /Y "%ROOT%CMakeLists.txt" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
-) else if exist "%ROOT%src\ver\CMakeLists.txt" (
-  copy /Y "%ROOT%src\ver\CMakeLists.txt" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
-) else goto :missing_branding
+set "VERSION_CMAKE="
+if exist "%ROOT%src\ver\CMakeLists.txt" (
+  set "VERSION_CMAKE=%ROOT%src\ver\CMakeLists.txt"
+) else if exist "%ROOT%CMakeLists.txt" (
+  findstr /C:"DRAGLUS_VERSION_SUFFIX" "%ROOT%CMakeLists.txt" >nul
+  if not errorlevel 1 set "VERSION_CMAKE=%ROOT%CMakeLists.txt"
+)
+if not defined VERSION_CMAKE goto :missing_branding
+copy /Y "!VERSION_CMAKE!" "aseprite\src\ver\CMakeLists.txt" >nul || goto :fail
 findstr /C:"DRAGLUS_VERSION_SUFFIX" "aseprite\src\ver\CMakeLists.txt" >nul || goto :missing_branding
 
-if exist "%ROOT%generated_version.h.in" (
-  copy /Y "%ROOT%generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
-) else if exist "%ROOT%src\ver\generated_version.h.in" (
+if exist "%ROOT%src\ver\generated_version.h.in" (
   copy /Y "%ROOT%src\ver\generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
+) else if exist "%ROOT%generated_version.h.in" (
+  copy /Y "%ROOT%generated_version.h.in" "aseprite\src\ver\generated_version.h.in" >nul || goto :fail
 ) else echo Using the checkout's upstream generated_version.h.in
 
-if exist "%ROOT%info.c" (
-  copy /Y "%ROOT%info.c" "aseprite\src\ver\info.c" >nul || goto :fail
-) else if exist "%ROOT%src\ver\info.c" (
+if exist "%ROOT%src\ver\info.c" (
   copy /Y "%ROOT%src\ver\info.c" "aseprite\src\ver\info.c" >nul || goto :fail
+) else if exist "%ROOT%info.c" (
+  copy /Y "%ROOT%info.c" "aseprite\src\ver\info.c" >nul || goto :fail
 ) else echo Using the checkout's upstream info.c
 
-if exist "%ROOT%info.h" (
-  copy /Y "%ROOT%info.h" "aseprite\src\ver\info.h" >nul || goto :fail
-) else if exist "%ROOT%src\ver\info.h" (
+if exist "%ROOT%src\ver\info.h" (
   copy /Y "%ROOT%src\ver\info.h" "aseprite\src\ver\info.h" >nul || goto :fail
+) else if exist "%ROOT%info.h" (
+  copy /Y "%ROOT%info.h" "aseprite\src\ver\info.h" >nul || goto :fail
 ) else echo Using the checkout's upstream info.h
 
 rem Calculate the user-visible version without Git's dirty marker.
@@ -207,7 +211,7 @@ goto :fail
 echo ERROR: no Aseprite tag was found; set ASEPRITE_VERSION explicitly
 goto :fail
 :missing_branding
-echo ERROR: missing CMakeLists.txt with Draglus version logic beside build.cmd
+echo ERROR: missing Draglus version module at src\ver\CMakeLists.txt
 goto :fail
 :fail
 popd
