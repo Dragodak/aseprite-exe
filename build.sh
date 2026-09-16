@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 SOURCE_REPOSITORY="${ASEPRITE_REPOSITORY:-https://github.com/aseprite/aseprite.git}"
 UPSTREAM_REPOSITORY="${ASEPRITE_UPSTREAM_REPOSITORY:-https://github.com/aseprite/aseprite.git}"
 REQUESTED_VERSION="${ASEPRITE_VERSION:-}"
+PINNED_COMMIT="${ASEPRITE_COMMIT:-}"
 VERSION_SUFFIX="${DRAGLUS_VERSION_SUFFIX:-draglus-dev}"
 BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 SOURCE_DIR="$ROOT_DIR/aseprite"
@@ -17,6 +18,14 @@ fail()
   echo "ERROR: $*" >&2
   exit 1
 }
+
+[[ -n "$REQUESTED_VERSION" ]] || \
+  fail "ASEPRITE_VERSION must be set to an explicit Aseprite release tag (for example v1.3.18.5)"
+
+SOURCE_VERSION="$REQUESTED_VERSION"
+if [[ "$SOURCE_VERSION" != v* && "$SOURCE_VERSION" =~ ^[0-9] ]]; then
+  SOURCE_VERSION="v$SOURCE_VERSION"
+fi
 
 case "$(uname -s)" in
   Darwin*)
@@ -58,7 +67,9 @@ done
 
 if [[ ! -d "$SOURCE_DIR/.git" ]]; then
   [[ ! -e "$SOURCE_DIR" ]] || fail "$SOURCE_DIR exists but is not a Git checkout"
-  git clone --recursive --tags "$SOURCE_REPOSITORY" "$SOURCE_DIR"
+  # Do not populate a working tree from the repository's default branch.
+  # The selected tag is fetched and checked out explicitly below.
+  git clone --no-checkout --recursive --tags "$SOURCE_REPOSITORY" "$SOURCE_DIR"
 else
   git -C "$SOURCE_DIR" remote set-url origin "$SOURCE_REPOSITORY" || true
   git -C "$SOURCE_DIR" fetch --tags
@@ -73,13 +84,6 @@ ensure_upstream_remote()
   fi
 }
 
-latest_tag()
-{
-  git -C "$SOURCE_DIR" for-each-ref \
-    --format='%(refname:strip=2)' \
-    --sort=-version:refname refs/tags | head -n 1
-}
-
 fetch_version()
 {
   local remote="$1"
@@ -87,21 +91,6 @@ fetch_version()
   git -C "$SOURCE_DIR" fetch --quiet --depth=1 --no-tags "$remote" \
     "$version:refs/remotes/$remote/$version"
 }
-
-if [[ -z "$REQUESTED_VERSION" ]]; then
-  REQUESTED_VERSION="$(latest_tag)"
-  if [[ -z "$REQUESTED_VERSION" ]]; then
-    ensure_upstream_remote
-    git -C "$SOURCE_DIR" fetch --quiet --tags upstream
-    REQUESTED_VERSION="$(latest_tag)"
-  fi
-fi
-[[ -n "$REQUESTED_VERSION" ]] || fail "no Aseprite tag was found; set ASEPRITE_VERSION explicitly"
-
-SOURCE_VERSION="$REQUESTED_VERSION"
-if [[ "$SOURCE_VERSION" != v* && "$SOURCE_VERSION" =~ ^[0-9] ]]; then
-  SOURCE_VERSION="v$SOURCE_VERSION"
-fi
 
 echo "Building Aseprite source $SOURCE_VERSION with Draglus branding"
 
@@ -119,7 +108,21 @@ if ! fetch_version origin "$SOURCE_VERSION"; then
   SOURCE_REMOTE=upstream
 fi
 
-git -C "$SOURCE_DIR" reset --quiet --hard "$SOURCE_REMOTE/$SOURCE_VERSION"
+SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse "$SOURCE_REMOTE/$SOURCE_VERSION^{commit}" 2>/dev/null)" || \
+  fail "Aseprite ref '$SOURCE_VERSION' did not resolve to a commit"
+SOURCE_COMMIT="$(printf '%s' "$SOURCE_COMMIT" | tr '[:upper:]' '[:lower:]')"
+if [[ -n "$PINNED_COMMIT" ]]; then
+  [[ "$PINNED_COMMIT" =~ ^[[:xdigit:]]{40}$ ]] || \
+    fail "ASEPRITE_COMMIT must be a full 40-character commit SHA"
+  PINNED_COMMIT="$(printf '%s' "$PINNED_COMMIT" | tr '[:upper:]' '[:lower:]')"
+  [[ "$SOURCE_COMMIT" == "$PINNED_COMMIT" ]] || \
+    fail "Aseprite tag $SOURCE_VERSION resolves to $SOURCE_COMMIT, expected $PINNED_COMMIT"
+else
+  echo "Warning: ASEPRITE_COMMIT is not set; the tag is explicit but not commit-verified."
+fi
+
+echo "Using pinned Aseprite commit $SOURCE_COMMIT"
+git -C "$SOURCE_DIR" reset --quiet --hard "$SOURCE_COMMIT"
 git -C "$SOURCE_DIR" submodule update --init --recursive
 
 # Apply supplied version files after resetting the source checkout. The
