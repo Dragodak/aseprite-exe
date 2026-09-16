@@ -29,6 +29,8 @@ jobs:
             platform: windows-x64
           - os: ubuntu-24.04
             platform: linux-x64
+          - os: macos-latest
+            platform: macos
     runs-on: ${{ matrix.os }}
     env:
       ASEPRITE_VERSION: ${{ github.event.inputs.version }}
@@ -51,6 +53,13 @@ jobs:
             libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
             libfontconfig1-dev
 
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v ninja >/dev/null 2>&1 || brew install ninja
+
       - name: Build Windows package
         if: runner.os == 'Windows'
         id: windows-build
@@ -60,6 +69,12 @@ jobs:
       - name: Build Linux package
         if: runner.os == 'Linux'
         id: linux-build
+        shell: bash
+        run: bash build.sh
+
+      - name: Build macOS package
+        if: runner.os == 'macOS'
+        id: macos-build
         shell: bash
         run: bash build.sh
 
@@ -76,5 +91,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aseprite-${{ matrix.platform }}-${{ steps.linux-build.outputs.ASEPRITE_VERSION }}
+          path: github
+          if-no-files-found: error
+
+      - name: Upload macOS package
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite-${{ matrix.platform }}-${{ steps.macos-build.outputs.ASEPRITE_VERSION }}
           path: github
           if-no-files-found: error
