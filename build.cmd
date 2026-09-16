@@ -71,7 +71,7 @@ if errorlevel 1 (
 )
 
 set "SOURCE_COMMIT="
-for /f "delims=" %%c in ('git -C aseprite rev-parse "!SOURCE_REMOTE!/!SOURCE_VERSION!^{commit}" 2^>nul') do set "SOURCE_COMMIT=%%c"
+for /f "delims=" %%c in ('git -C aseprite rev-list -n 1 "!SOURCE_REMOTE!/!SOURCE_VERSION!" 2^>nul') do set "SOURCE_COMMIT=%%c"
 if not defined SOURCE_COMMIT goto :missing_commit
 if defined ASEPRITE_COMMIT if /I not "!SOURCE_COMMIT!"=="!ASEPRITE_COMMIT!" goto :commit_mismatch
 if not defined ASEPRITE_COMMIT echo Warning: ASEPRITE_COMMIT is not set; the tag is explicit but not commit-verified.
