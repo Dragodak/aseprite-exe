@@ -101,8 +101,12 @@ rem Draglus suffix visible in the title and About dialog.
 if exist "%ROOT%check_update_draglus.patch" (
   findstr /C:"Draglus is a display/build suffix" "aseprite\src\app\check_update.cpp" >nul
   if errorlevel 1 (
-    git -C aseprite apply --check "%ROOT%check_update_draglus.patch" >nul 2>nul || goto :update_patch_mismatch
-    git -C aseprite apply "%ROOT%check_update_draglus.patch" || goto :fail
+    git -C aseprite apply --check "%ROOT%check_update_draglus.patch" >nul 2>nul
+    if errorlevel 1 (
+      rem Allow a CRLF patch from a Windows checkout to apply to an LF file.
+      git -C aseprite apply --check --ignore-space-at-eol "%ROOT%check_update_draglus.patch" >nul 2>nul || goto :update_patch_mismatch
+      git -C aseprite apply --ignore-space-at-eol "%ROOT%check_update_draglus.patch" || goto :fail
+    ) else git -C aseprite apply "%ROOT%check_update_draglus.patch" || goto :fail
   )
 ) else echo Warning: check_update_draglus.patch not found; the updater may report the same version as newer.
 
