@@ -1,0 +1,10 @@
+diff --git a/src/app/check_update.cpp b/src/app/check_update.cpp
+--- a/src/app/check_update.cpp
++++ b/src/app/check_update.cpp
+@@ -181,1 +181,6 @@ void CheckUpdateThreadLauncher::showUI()
++  // Draglus is a display/build suffix, not a newer upstream release.
++  const auto draglusSuffix = localVersionStr.find("-draglus");
++  if (draglusSuffix != std::string::npos)
++    localVersionStr.erase(draglusSuffix);
++
+   bool newVer = false;
